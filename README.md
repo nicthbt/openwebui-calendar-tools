@@ -1,12 +1,12 @@
 # Open WebUI Calendar tools
 
-Search on calendar for information and fetch specific event content.
+Search on calendar for information and manage specific event content.
 
 ## Features
 
-- Extracts keywords from search query.
+- Manages events across calendars
 - Searches for events in specified time range and calendars.
-- Ranks results using similarity scoring and event date.
+- Ranks search results using keywords scoring and event date.
 - Stores credentials in User Valves settings.
 - Supports CalDAV protocol
 
@@ -14,18 +14,18 @@ Search on calendar for information and fetch specific event content.
 
 ### `search_calendar_events`
 
-Searches for events on the calendar and returns metadata.
+Searches for events into the calendars and returns metadata.
 
-Parameters:
+Input parameters:
 
 | Parameter | Description |
 |---|---|
 | `query` | Search query (optional). |
 | `start` | Start of the time range (inclusive, defaults to now). |
-| `end` | End of the time range (exclusive, defaults to none). |
+| `end` | End of the time range (exclusive, defaults to a year from now). |
 | `calendars` | Calendars to search (optional, defaults to all). |
 
-Each result contains:
+The output contains for each result:
 
 - CalDAV path
 - Start date
@@ -36,6 +36,74 @@ Each result contains:
 - Location
 - Attendees
 - Search score
+
+### `create_calendar_event`
+
+Creates a new event into the calendar and returns metadata.
+
+Input parameters:
+
+| Parameter | Description |
+|---|---|
+| `calendar` | Calendar name. |
+| `start` | Event start date (inclusive). |
+| `end` | Event end date (exclusive). |
+| `title` | Event summary. |
+| `description` | Event description (optional). |
+| `location` | Event location (optional). |
+| `attendees` | List of attendees (optional). |
+
+The output contains:
+
+- CalDAV path
+- Start date
+- End date
+- Calendar
+- Title
+- Description
+- Location
+- Attendees
+
+### `update_calendar_event`
+
+Modifies an event from the calendar and returns metadata.
+
+Input parameters:
+
+| Parameter | Description |
+|---|---|
+| `path` | CalDAV path. |
+| `calendar` | Calendar name. |
+| `start` | Event start date (inclusive). |
+| `end` | Event end date (exclusive). |
+| `title` | Event summary. |
+| `description` | Event description (optional). |
+| `location` | Event location (optional). |
+| `attendees` | List of attendees (optional). |
+
+The output contains:
+
+- CalDAV path
+- Start date
+- End date
+- Calendar
+- Title
+- Description
+- Location
+- Attendees
+
+### `delete_calendar_event`
+
+Deletes an event from the calendar.
+
+Input parameters:
+
+| Parameter | Description |
+|---|---|
+| `path` | CalDAV path. |
+| `calendar` | Calendar name. |
+
+The output is empty.
 
 ## Installation
 

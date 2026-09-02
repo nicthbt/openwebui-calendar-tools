@@ -2,9 +2,9 @@
 title: Calendar tools
 author: Nicolas THIBAUT
 git_url: https://github.com/uppersafe/
-description: Search calendar for information and fetch specific event .
+description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.0.0
+version: 1.1.0
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -19,7 +19,7 @@ import unicodedata
 import mimetypes
 import asyncio
 import logging
-import urllib
+from urllib.parse import urljoin, urlsplit
 from hashlib import blake2b
 from difflib import SequenceMatcher
 from fastapi import Request
@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from contextvars import ContextVar
 from functools import wraps
 from datetime import datetime, timedelta
-from caldav import DAVClient
+from caldav import DAVClient, Calendar, Event
 
 from open_webui.models.users import UserModel
 
@@ -50,15 +50,15 @@ class CalendarClient:
         password: str,
         verify: bool = True,
     ):
-        self.url = f'https://{host}:{port}/{path.lstrip("/")}'
+        self.server = f"https://{host}:{port}"
         self.dav = DAVClient(
-            url=self.url,
+            url=urljoin(self.server, path),
             username=username,
             password=password,
             timeout=10,
             ssl_verify_cert=verify,
         )
-        self.calendars = {}
+        self.calendars = None
 
     def close(self) -> None:
         try:
@@ -74,26 +74,158 @@ class CalendarClient:
         except Exception as e:
             raise CalendarException("Unable to list calendars", e)
 
-        return self.calendars.keys()
+        return list(self.calendars)
 
-    def search(self, calendar: str, start: datetime, end: datetime) -> list:
-        results = []
+    def select(self, calendar: str) -> Calendar:
+        calendars = self.list() if self.calendars is None else list(self.calendars)
+        if calendar not in calendars:
+            raise CalendarException(f"Unable to find '{calendar}' among {calendars}")
 
-        if calendar not in self.list():
-            raise CalendarException(f"Unable to find calendar '{calendar}'")
+        return self.calendars.get(calendar)
+
+    def search(self, calendar: str, start: str, end: str) -> list:
+        events = []
+
+        # Convert to time range
+        range_start, range_end = self.get_time_range(start, end, default=True)
+
+        # Get calendar handler
+        handler = self.select(calendar)
 
         try:
-            results = self.dav.search_calendar(
-                self.calendars.get(calendar, None),
+            events = handler.search(
                 event=True,
-                start=start,
-                end=end,
-                expand=bool(end),
+                start=range_start,
+                end=range_end,
+                expand=True,
             )
         except Exception as e:
             raise CalendarException(f"Unable to search events in '{calendar}'", e)
 
-        return results
+        return [(event.get_icalendar_component(), event.url) for event in events]
+
+    def create(
+        self,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+    ) -> tuple:
+        event = None
+
+        # Convert to time range
+        event_start, event_end = self.get_time_range(start, end)
+
+        # Get calendar handler
+        handler = self.select(calendar)
+
+        try:
+            event = handler.add_event(
+                dtstart=event_start,
+                dtend=event_end,
+                summary=title,
+                description=description,
+                location=location,
+            )
+            with event.edit_icalendar_component() as component:
+                if attendees is not None:
+                    for attendee in attendees:
+                        component.add("attendee", f"mailto:{attendee}")
+            event.save()
+        except Exception as e:
+            raise CalendarException(f"Unable to create event in '{calendar}'", e)
+
+        return event.get_icalendar_component(), event.url
+
+    def update(
+        self,
+        path: str,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+    ) -> tuple:
+        event = None
+
+        # Convert to time range
+        event_start, event_end = self.get_time_range(start, end)
+
+        # Get calendar handler
+        handler = self.select(calendar)
+
+        try:
+            event = handler.event_by_url(urljoin(self.server, path))
+            with event.edit_icalendar_component() as component:
+                if event_start is not None:
+                    component.pop("dtstart", None)
+                    component.add("dtstart", event_start)
+                if event_end is not None:
+                    component.pop("dtend", None)
+                    component.add("dtend", event_end)
+                if title is not None:
+                    component.pop("summary", None)
+                    component.add("summary", title)
+                if description is not None:
+                    component.pop("description", None)
+                    component.add("description", description)
+                if location is not None:
+                    component.pop("location", None)
+                    component.add("location", location)
+                if attendees is not None:
+                    component.pop("attendee", None)
+                    for attendee in attendees:
+                        component.add("attendee", f"mailto:{attendee}")
+            event.save()
+        except Exception as e:
+            raise CalendarException(f"Unable to update event '{path}'", e)
+
+        return event.get_icalendar_component(), event.url
+
+    def delete(self, path: str, calendar: str) -> None:
+        # Get calendar handler
+        handler = self.select(calendar)
+
+        try:
+            event = handler.event_by_url(urljoin(self.server, path))
+            event.delete()
+        except Exception as e:
+            raise CalendarException(f"Unable to delete event '{path}'", e)
+
+    def get_time_range(self, start: str, end: str, default: bool = False) -> tuple:
+        range_start = None
+        range_end = None
+
+        if start is not None and end is None:
+            raise CalendarException("End date must be set with start date")
+        if end is not None and start is None:
+            raise CalendarException("Start date must be set with end date")
+
+        try:
+            if start is not None:
+                range_start = datetime.fromisoformat(start.strip())
+            elif default:
+                range_start = datetime.now().replace(microsecond=0).astimezone()
+            else:
+                range_start = start
+            if end is not None:
+                range_end = datetime.fromisoformat(end.strip())
+            elif default:
+                range_end = range_start + timedelta(days=365)
+            else:
+                range_end = end
+        except Exception as e:
+            raise CalendarException("Invalid ISO 8601 format")
+
+        if range_start and range_end and range_start >= range_end:
+            raise CalendarException("End date must be after start date")
+
+        return range_start, range_end
 
 
 def with_context(func):
@@ -122,7 +254,7 @@ def with_context(func):
                 done=False,
             )
 
-            # Connect to caldav server
+            # Connect to server
             session = await self._connect_caldav(username, password)
 
             # Set context for this call
@@ -131,7 +263,7 @@ def with_context(func):
             return await func(self, *args, **kwargs)
 
         except CalendarException as e:
-            log.error(f"{e} = {e.error}")
+            log.error(f"{e} ({e.error})" if e.error else str(e))
             return json.dumps({"error": str(e)})
 
         except Exception as e:
@@ -143,7 +275,7 @@ def with_context(func):
             if token is not None:
                 self.context.reset(token)
 
-            # Disconnect from caldav server
+            # Disconnect from server
             if session is not None:
                 self._disconnect(session)
 
@@ -242,9 +374,6 @@ class Tools:
         # Extract search keywords
         keywords = self._extract_keywords(query)
 
-        # Convert time range
-        range_start, range_end = self._get_time_range(start, end)
-
         # List calendars
         if len(calendars) == 0:
             calendars = session.list()
@@ -257,26 +386,17 @@ class Tools:
                     )
 
                 # Search for events
-                events = session.search(calendar, range_start, range_end)
-
-                for event in events:
-                    path = urllib.parse.urlsplit(str(event.url)).path
-                    component = event.get_icalendar_component()
-                    attendees = [
-                        re.sub("mailto:", "", attendee)
-                        for attendee in map(str, component.attendees)
-                        if attendee.startswith("mailto:")
-                    ]
+                for component, url in session.search(calendar, start, end):
                     results.append(
                         self._score_message(
+                            url,
                             calendar,
-                            path,
                             component.start,
                             component.end,
                             component.summary,
                             component.description,
                             component.location,
-                            attendees,
+                            self._get_attendees(component.attendees),
                             keywords,
                         )
                     )
@@ -287,26 +407,79 @@ class Tools:
         # Sort results and return best matches
         return self._sort_results(results, [("score", True), ("start", False)])
 
-    def _get_time_range(self, start: str, end: str) -> tuple:
-        range_start = None
-        range_end = None
+    def _create_caldav(
+        self,
+        session,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+    ) -> dict:
+        component, url = session.create(
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+        )
+        return self._format_result(
+            url,
+            calendar,
+            component.start,
+            component.end,
+            component.summary,
+            component.description,
+            component.location,
+            self._get_attendees(component.attendees),
+        )
 
-        try:
-            if start is not None:
-                range_start = datetime.fromisoformat(start.strip())
-            else:
-                range_start = datetime.now().astimezone()
-            if end is not None:
-                range_end = datetime.fromisoformat(end.strip())
-            else:
-                range_end = end
-        except Exception as e:
-            raise ValueError("Invalid ISO 8601 format")
+    def _update_caldav(
+        self,
+        session,
+        path: str,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+    ) -> dict:
+        component, url = session.update(
+            path,
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+        )
+        return self._format_result(
+            url,
+            calendar,
+            component.start,
+            component.end,
+            component.summary,
+            component.description,
+            component.location,
+            self._get_attendees(component.attendees),
+        )
 
-        if range_end is not None and range_end <= range_start:
-            raise ValueError("End date must be after start date")
+    def _delete_caldav(self, session, path: str, calendar: str) -> None:
+        session.delete(path, calendar)
 
-        return range_start, range_end
+    def _get_attendees(self, attendees: list):
+        return [
+            re.sub("^mailto:", "", attendee)
+            for attendee in map(str, attendees)
+            if attendee.startswith("mailto:")
+        ]
 
     def _get_credentials(self, config: dict) -> dict:
         if config.username is None:
@@ -340,8 +513,8 @@ class Tools:
 
     def _score_message(
         self,
+        url: str,
         calendar: str,
-        path: str,
         start: datetime,
         end: datetime,
         title: str,
@@ -387,8 +560,32 @@ class Tools:
                 for match_size in self._seq_match(attendee, keywords)
             )
 
-        return {
-            "path": path,
+        return self._format_result(
+            url,
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+            score,
+        )
+
+    def _format_result(
+        self,
+        url: str,
+        calendar: str,
+        start: datetime,
+        end: datetime,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+        score: float = None,
+    ) -> dict:
+        result = {
+            "path": urlsplit(str(url)).path,
             "start": start.isoformat(),
             "end": end.isoformat(),
             "calendar": calendar,
@@ -396,8 +593,10 @@ class Tools:
             "description": description,
             "location": location,
             "attendees": attendees,
-            "score": score,
         }
+        if score is not None:
+            result.update({"score": score})
+        return result
 
     def _sort_results(self, results: list, keys: list) -> list:
         # Sort by keys from lowest to highest priority
@@ -459,7 +658,7 @@ class Tools:
 
         :param query: The search keywords to look up without special operators or wildcards (optional)
         :param start: Start of the time range as ISO 8601 timezone-aware date format (inclusive, defaults to now)
-        :param end: End of the time range as ISO 8601 timezone-aware date format (exclusive, defaults to none)
+        :param end: End of the time range as ISO 8601 timezone-aware date format (exclusive, defaults to a year from now)
         :param calendars: A list of calendars to look into (optional, defaults to all)
         :return: JSON with results containing caldav path, start date, end date, calendar name, title, description, location, attendees and search score of each event
         """
@@ -467,11 +666,11 @@ class Tools:
 
         await self._emit_status(
             __event_emitter__,
-            "Searching on calendar...",
+            "Searching for events...",
             done=False,
         )
 
-        # Browse events on caldav server
+        # Browse events
         results = await asyncio.to_thread(
             self._browse_caldav,
             session,
@@ -488,3 +687,159 @@ class Tools:
         )
 
         return json.dumps(list(results), ensure_ascii=False)
+
+    @with_context
+    async def create_calendar_event(
+        self,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str = None,
+        location: str = None,
+        attendees: list = None,
+        __request__: Request = None,
+        __user__: dict = None,
+        __event_emitter__=None,
+        __event_call__=None,
+    ) -> str:
+        """
+        Create a new event into a specific calendar.
+
+        :param calendar: The name of the calendar to add the event into
+        :param start: Start of the event as ISO 8601 timezone-aware date format (inclusive)
+        :param end: End of the event as ISO 8601 timezone-aware date format (exclusive)
+        :param title: The summary of the event
+        :param description: The description of the event (optional)
+        :param location: The location of the event (optional)
+        :param attendees: A list of attendees for the event (optional)
+        :return: JSON with result containing caldav path, start date, end date, calendar name, title, description, location and attendees of the event
+        """
+        user, session = self.context.get()
+
+        await self._emit_status(
+            __event_emitter__,
+            "Creating event...",
+            done=False,
+        )
+
+        # Create event
+        result = await asyncio.to_thread(
+            self._create_caldav,
+            session,
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+        )
+
+        await self._emit_status(
+            __event_emitter__,
+            f"Event creation done.",
+            done=True,
+        )
+
+        return json.dumps(result, ensure_ascii=False)
+
+    @with_context
+    async def update_calendar_event(
+        self,
+        path: str,
+        calendar: str,
+        start: str = None,
+        end: str = None,
+        title: str = None,
+        description: str = None,
+        location: str = None,
+        attendees: list = None,
+        __request__: Request = None,
+        __user__: dict = None,
+        __event_emitter__=None,
+        __event_call__=None,
+    ) -> str:
+        """
+        Update an event from a specific calendar.
+
+        :param path: The caldav path of the event
+        :param calendar: The name of the calendar to update the event from
+        :param start: Start of the event as ISO 8601 timezone-aware date format (inclusive, mandatory when end date is set)
+        :param end: End of the event as ISO 8601 timezone-aware date format (exclusive, mandatory when start date is set)
+        :param title: The summary of the event (optional)
+        :param description: The description of the event (optional)
+        :param location: The location of the event (optional)
+        :param attendees: A list of attendees for the event (optional)
+        :return: JSON with result containing caldav path, start date, end date, calendar name, title, description, location and attendees of the event
+        """
+        user, session = self.context.get()
+
+        await self._emit_status(
+            __event_emitter__,
+            "Updating event...",
+            done=False,
+        )
+
+        # Update event
+        result = await asyncio.to_thread(
+            self._update_caldav,
+            session,
+            path,
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+        )
+
+        await self._emit_status(
+            __event_emitter__,
+            f"Event update done.",
+            done=True,
+        )
+
+        return json.dumps(result, ensure_ascii=False)
+
+    @with_context
+    async def delete_calendar_event(
+        self,
+        path: str,
+        calendar: str,
+        __request__: Request = None,
+        __user__: dict = None,
+        __event_emitter__=None,
+        __event_call__=None,
+    ) -> str:
+        """
+        Delete an event from a specific calendar.
+
+        :param path: The caldav path of the event
+        :param calendar: The name of the calendar to delete the event from
+        :return: JSON with result
+        """
+        user, session = self.context.get()
+
+        await self._emit_status(
+            __event_emitter__,
+            "Deleting event...",
+            done=False,
+        )
+
+        # Delete event
+        await asyncio.to_thread(
+            self._delete_caldav,
+            session,
+            path,
+            calendar,
+        )
+
+        await self._emit_status(
+            __event_emitter__,
+            f"Event deletion done.",
+            done=True,
+        )
+
+        return json.dumps({}, ensure_ascii=False)
