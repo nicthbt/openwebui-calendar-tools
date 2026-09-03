@@ -74,9 +74,9 @@ Input parameters:
 |---|---|
 | `path` | CalDAV path. |
 | `calendar` | Calendar name. |
-| `start` | Event start date (inclusive). |
-| `end` | Event end date (exclusive). |
-| `title` | Event summary. |
+| `start` | Event start date (inclusive, mandatory when end date is set). |
+| `end` | Event end date (exclusiv, mandatory when start date is set). |
+| `title` | Event summary (optional). |
 | `description` | Event description (optional). |
 | `location` | Event location (optional). |
 | `attendees` | List of attendees (optional). |

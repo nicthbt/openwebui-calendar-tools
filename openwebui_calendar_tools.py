@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/uppersafe/
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.1.0
+version: 1.1.2
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -209,12 +209,16 @@ class CalendarClient:
         try:
             if start is not None:
                 range_start = datetime.fromisoformat(start.strip())
+                if not any([range_start.hour, range_start.minute, range_start.second]):
+                    range_start = range_start.date()
             elif default:
                 range_start = datetime.now().replace(microsecond=0).astimezone()
             else:
                 range_start = start
             if end is not None:
                 range_end = datetime.fromisoformat(end.strip())
+                if not any([range_end.hour, range_end.minute, range_end.second]):
+                    range_end = range_end.date()
             elif default:
                 range_end = range_start + timedelta(days=365)
             else:
