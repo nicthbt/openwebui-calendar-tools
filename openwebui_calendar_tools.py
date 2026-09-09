@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/uppersafe/
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.1.2
+version: 1.2.0
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -22,7 +22,7 @@ import logging
 from urllib.parse import urljoin, urlsplit
 from hashlib import blake2b
 from difflib import SequenceMatcher
-from fastapi import Request
+from fastapi import Request, UploadFile
 from pydantic import BaseModel, Field
 from contextvars import ContextVar
 from functools import wraps
@@ -30,6 +30,15 @@ from datetime import datetime, timedelta
 from caldav import DAVClient, Calendar, Event
 
 from open_webui.models.users import UserModel
+from open_webui.models.config import Config
+from open_webui.models.files import Files
+from open_webui.internal.db import get_async_db_context
+from open_webui.routers.files import upload_file_handler
+from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
+from open_webui.routers.retrieval import (
+    ProcessFileForm,
+    process_file,
+)
 
 log = logging.getLogger(__name__)
 
@@ -187,44 +196,55 @@ class CalendarClient:
 
         return event.get_icalendar_component(), event.url
 
-    def delete(self, path: str, calendar: str) -> None:
-        # Get calendar handler
-        handler = self.select(calendar)
-
+    def delete(self, path: str) -> None:
         try:
-            event = handler.event_by_url(urljoin(self.server, path))
+            event = Event(client=self.dav, url=urljoin(self.server, path))
             event.delete()
         except Exception as e:
             raise CalendarException(f"Unable to delete event '{path}'", e)
+
+    def download(self, path: str) -> bytes:
+        event = None
+
+        try:
+            event = Event(client=self.dav, url=urljoin(self.server, path))
+            event.load()
+        except Exception as e:
+            raise CalendarException(f"Unable to download event '{path}'", e)
+
+        return event.get_data().encode()
 
     def get_time_range(self, start: str, end: str, default: bool = False) -> tuple:
         range_start = None
         range_end = None
 
         if start is not None and end is None:
-            raise CalendarException("End date must be set with start date")
+            raise CalendarException("End date must be set when start date is set")
         if end is not None and start is None:
-            raise CalendarException("Start date must be set with end date")
+            raise CalendarException("Start date must be set when end date is set")
 
         try:
             if start is not None:
                 range_start = datetime.fromisoformat(start.strip())
-                if not any([range_start.hour, range_start.minute, range_start.second]):
-                    range_start = range_start.date()
             elif default:
                 range_start = datetime.now().replace(microsecond=0).astimezone()
             else:
                 range_start = start
             if end is not None:
                 range_end = datetime.fromisoformat(end.strip())
-                if not any([range_end.hour, range_end.minute, range_end.second]):
-                    range_end = range_end.date()
             elif default:
                 range_end = range_start + timedelta(days=365)
             else:
                 range_end = end
         except Exception as e:
             raise CalendarException("Invalid ISO 8601 format")
+
+        time_start = any([range_start.hour, range_start.minute, range_start.second])
+        time_end = any([range_end.hour, range_end.minute, range_end.second])
+
+        if not time_start and not time_end:
+            range_start = range_start.date()
+            range_end = range_end.date()
 
         if range_start and range_end and range_start >= range_end:
             raise CalendarException("End date must be after start date")
@@ -475,8 +495,11 @@ class Tools:
             self._get_attendees(component.attendees),
         )
 
-    def _delete_caldav(self, session, path: str, calendar: str) -> None:
-        session.delete(path, calendar)
+    def _delete_caldav(self, session, path: str) -> None:
+        session.delete(path)
+
+    def _download_caldav(self, session, path: str) -> bytes:
+        return session.download(path)
 
     def _get_attendees(self, attendees: list):
         return [
@@ -625,6 +648,105 @@ class Tools:
 
         return list(keywords)
 
+    async def _get_cache_file(
+        self,
+        file_hash: str,
+        user: UserModel,
+    ) -> tuple:
+        cache_key = f"{self.namespace}.{user.id}.{file_hash}"
+        cache_value = await Config.get(cache_key, {})
+
+        file_id = cache_value.get("id", None)
+        file_collection = cache_value.get("collection", None)
+
+        cleanup = False
+
+        if file_id is not None:
+            file = await Files.get_file_by_id(file_id)
+            if not file:
+                cleanup = True
+
+        if file_collection is not None:
+            collection = await ASYNC_VECTOR_DB_CLIENT.has_collection(file_collection)
+            if not collection:
+                cleanup = True
+
+        # Delete cache if file or collection no longer exist
+        if cleanup:
+            log.warning(f"Deleting cache for {cache_key}")
+            await Config.delete(cache_key)
+            return None, None
+
+        return file_id, file_collection
+
+    async def _set_cache_file(
+        self,
+        file_hash: str,
+        file_id: str,
+        file_collection: str,
+        user: UserModel,
+    ) -> None:
+        cache_key = f"{self.namespace}.{user.id}.{file_hash}"
+        cache_value = {
+            "id": file_id,
+            "collection": file_collection,
+        }
+        await Config.upsert({cache_key: cache_value})
+
+    async def _upload_file(
+        self,
+        filename: str,
+        mimetype: str,
+        content: bytes,
+        process: bool,
+        user: UserModel,
+        __request__: Request,
+    ) -> tuple:
+        async with get_async_db_context() as db:
+            # Search for file in cache
+            file_hash = blake2b(content).hexdigest()
+            file_id, file_collection = await self._get_cache_file(
+                file_hash,
+                user=user,
+            )
+
+            # Upload file if not in cache
+            if file_id is None:
+                log.info(f"Uploading '{filename}'")
+                file = await upload_file_handler(
+                    __request__,
+                    UploadFile(
+                        file=io.BytesIO(content),
+                        filename=filename,
+                        headers={"content-type": mimetype},
+                    ),
+                    metadata={},
+                    process=False,
+                    user=user,
+                    db=db,
+                )
+                file_id = file.id
+
+            # Process file if not in cache
+            if file_collection is None and process is True:
+                log.info(f"Processing '{filename}'")
+                result = await process_file(
+                    __request__,
+                    ProcessFileForm(file_id=file_id),
+                    user=user,
+                    db=db,
+                )
+                file_collection = result.get("collection_name")
+
+            await self._set_cache_file(
+                file_hash,
+                file_id,
+                file_collection,
+                user=user,
+            )
+
+            return file_id, file_collection
+
     async def _emit_status(
         self,
         event_emitter,
@@ -693,6 +815,74 @@ class Tools:
         return json.dumps(list(results), ensure_ascii=False)
 
     @with_context
+    async def fetch_calendar_events(
+        self,
+        events: list,
+        __request__: Request = None,
+        __user__: dict = None,
+        __event_emitter__=None,
+        __event_call__=None,
+    ) -> str:
+        """
+        Fetch specific events from calendar.
+        Best to generate download URL.
+
+        :param events: A list of caldav path for events to fetch
+        :return: JSON with results containing ICS filename, file ID and download URL for each event
+        """
+        user, session = self.context.get()
+
+        await self._emit_status(
+            __event_emitter__,
+            f"Fetching {len(events)} events...",
+            done=False,
+        )
+
+        results = {}
+
+        for path in events:
+            filename = os.path.basename(path)
+            mimetype, encoding = mimetypes.guess_type(filename)
+
+            if not mimetype.startswith("text/"):
+                raise TypeError(f"Invalid mimetype '{mimetype}' for '{path}'")
+
+            log.info(f"Downloading '{path}'")
+            content = await asyncio.to_thread(self._download_caldav, session, path)
+
+            # Upload file but do not process content
+            file_id, file_collection = await self._upload_file(
+                filename,
+                mimetype,
+                content,
+                process=False,
+                user=user,
+                __request__=__request__,
+            )
+
+            # Build download link
+            results.update(
+                {
+                    file_id: {
+                        "filename": filename,
+                        "id": file_id,
+                        "url": (
+                            f'{str(__request__.base_url).rstrip("/")}'
+                            f"/api/v1/files/{file_id}/content?attachment=true"
+                        ),
+                    }
+                }
+            )
+
+        await self._emit_status(
+            __event_emitter__,
+            f"{len(results)} results found.",
+            done=True,
+        )
+
+        return json.dumps(list(results.values()), ensure_ascii=False)
+
+    @with_context
     async def create_calendar_event(
         self,
         calendar: str,
@@ -708,7 +898,7 @@ class Tools:
         __event_call__=None,
     ) -> str:
         """
-        Create a new event into a specific calendar.
+        Create a new event into calendar.
 
         :param calendar: The name of the calendar to add the event into
         :param start: Start of the event as ISO 8601 timezone-aware date format (inclusive)
@@ -765,7 +955,7 @@ class Tools:
         __event_call__=None,
     ) -> str:
         """
-        Update an event from a specific calendar.
+        Update an event from calendar.
 
         :param path: The caldav path of the event
         :param calendar: The name of the calendar to update the event from
@@ -811,17 +1001,15 @@ class Tools:
     async def delete_calendar_event(
         self,
         path: str,
-        calendar: str,
         __request__: Request = None,
         __user__: dict = None,
         __event_emitter__=None,
         __event_call__=None,
     ) -> str:
         """
-        Delete an event from a specific calendar.
+        Delete an event from calendar.
 
         :param path: The caldav path of the event
-        :param calendar: The name of the calendar to delete the event from
         :return: JSON with result
         """
         user, session = self.context.get()
@@ -837,7 +1025,6 @@ class Tools:
             self._delete_caldav,
             session,
             path,
-            calendar,
         )
 
         await self._emit_status(
