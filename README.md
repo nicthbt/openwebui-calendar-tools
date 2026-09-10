@@ -4,12 +4,12 @@ Search on calendar for information and manage specific event content.
 
 ## Features
 
-- Manages events across calendars
+- Creates, updates and deletes events across calendars.
 - Searches for events in specified time range and calendars.
 - Ranks search results using keywords scoring and event date.
 - Downloads events as ICS files.
-- Stores credentials in User Valves settings.
-- Supports CalDAV protocol
+- Secures identity and access management with isolated/user-based authentication.
+- Supports CalDAV protocol.
 
 ## Available tools
 
@@ -123,12 +123,12 @@ The output is empty.
 
 ## Installation
 
-1. Go to Workspace in Open WebUI.
-2. Create a new tool from the Tools tab.
+1. Go to `Workspace` in Open WebUI.
+2. Create a new tool from the `Tools` tab.
 3. Paste the content of `openwebui_calendar_tools.py` and save the tool.
-4. Configure the username and password for each user.
+4. Enable the tool in your custom model in `Models`.
 5. Configure the tool valves to change default settings.
-6. Enable the tool in your custom model.
+6. Configure the username and password for each user.
 
 ## Configuration
 
@@ -143,7 +143,7 @@ The output is empty.
 
 | Setting | Default | Description |
 |---|---:|---|
-| `protocol` | `caldav` | Connection method: `caldav`. |
+| `protocol` | `caldav` | Connection method. |
 | `verify_ssl` | `true` | SSL certificates verification. |
 | `host` | `host.docker.internal` | Server hostname or IP address reachable from the Open WebUI container. |
 | `port` | Protocol default | Optional custom server port. |
@@ -153,10 +153,27 @@ The output is empty.
 
 When `port` is not set, the protocol default port (`443`) is used.
 
+## CalDAV endpoints
+
+| Provider | Host | Port | Path |
+|---|---|---|---|
+| Apple iCloud | `caldav.icloud.com` | `443` | `/`
+| Google Calendar | `www.google.com` | `443` | `/calendar/dav/`
+| Synology | `example.com` | `5001` | `/caldav/`
+| Nextcloud | `example.com` | `443` | `/remote.php/dav/`
+| SOGo | `example.com` | `443` | `/SOGo/dav/`
+
 ## Security
 
-- Enable encryption to store credentials (set a strong `WEBUI_SECRET_KEY` and set `ENABLE_VALVE_ENCRYPTION` to `true`).
-- Restrict network access between Open WebUI and the calendar server.
+**Apple and Google require to setup an app password** to access your account over the CalDAV protocol:
+- Apple: https://account.apple.com/account/manage
+- Google: https://myaccount.google.com/apppasswords
+
+**Enable encryption** to securely store credentials:
+- Set `WEBUI_SECRET_KEY` (generate a secure key with `openssl rand -hex 32`).
+- Set `ENABLE_VALVE_ENCRYPTION` to `true`.
+
+Restrict network access between Open WebUI and the calendar server.
 
 ## Compatibility
 
