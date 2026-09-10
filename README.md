@@ -7,6 +7,7 @@ Search on calendar for information and manage specific event content.
 - Manages events across calendars
 - Searches for events in specified time range and calendars.
 - Ranks search results using keywords scoring and event date.
+- Downloads events as ICS files.
 - Stores credentials in User Valves settings.
 - Supports CalDAV protocol
 
@@ -14,7 +15,7 @@ Search on calendar for information and manage specific event content.
 
 ### `search_calendar_events`
 
-Searches for events into the calendars and returns metadata.
+Searches for events into calendars and returns metadata.
 
 Input parameters:
 
@@ -37,9 +38,25 @@ The output contains for each result:
 - Attendees
 - Search score
 
+### `fetch_calendar_events`
+
+Retrieves specific events from calendar and uses Open WebUI's file upload system to generate download links.
+
+Input parameters:
+
+| Parameter | Description |
+|---|---|
+| `events` | List of calendar events. |
+
+The output contains for each result:
+
+- ICS filename
+- Open WebUI file ID
+- Download URL
+
 ### `create_calendar_event`
 
-Creates a new event into the calendar and returns metadata.
+Creates a new event into calendar and returns metadata.
 
 Input parameters:
 
@@ -66,7 +83,7 @@ The output contains:
 
 ### `update_calendar_event`
 
-Modifies an event from the calendar and returns metadata.
+Modifies an event from calendar and returns metadata.
 
 Input parameters:
 
@@ -94,14 +111,13 @@ The output contains:
 
 ### `delete_calendar_event`
 
-Deletes an event from the calendar.
+Deletes an event from calendar.
 
 Input parameters:
 
 | Parameter | Description |
 |---|---|
 | `path` | CalDAV path. |
-| `calendar` | Calendar name. |
 
 The output is empty.
 
