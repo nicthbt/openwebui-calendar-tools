@@ -50,8 +50,8 @@ Input parameters:
 
 The output contains for each result:
 
-- ICS filename
 - Open WebUI file ID
+- Filename
 - Download URL
 
 ### `create_calendar_event`
@@ -183,7 +183,9 @@ The tool imports internal Open WebUI modules, so compatibility with earlier or l
 
 ## Requirements
 
-Allow Open WebUI to install listed requirements (set `ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS` to `true` and `OFFLINE_MODE` to `false`).
+Allow Open WebUI to install listed requirements:
+- Set `ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS` to `true`.
+- Set `OFFLINE_MODE` to `false`.
 
 The tool relies on a 3rd party Python package:
 - [caldav](https://github.com/python-caldav/caldav)

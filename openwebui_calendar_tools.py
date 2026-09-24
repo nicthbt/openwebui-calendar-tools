@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/uppersafe/
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.2.0
+version: 1.2.1
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -261,6 +261,7 @@ def with_context(func):
         try:
             __request__ = kwargs.get("__request__", None)
             __user__ = kwargs.get("__user__", None)
+            __metadata__ = kwargs.get("__metadata__", None)
             __event_emitter__ = kwargs.get("__event_emitter__", None)
             __event_call__ = kwargs.get("__event_call__", None)
 
@@ -268,6 +269,11 @@ def with_context(func):
                 raise ValueError("Request context not available")
             if __user__ is None:
                 raise ValueError("User context not available")
+            if __metadata__ is None:
+                raise ValueError("Metadata context not available")
+            else:
+                if __metadata__.get("files", None) is None:
+                    __metadata__["files"] = []
 
             user = UserModel(**__user__)
             username, password = self._get_credentials(__user__.get("valves"))
@@ -747,6 +753,21 @@ class Tools:
 
             return file_id, file_collection
 
+    async def _emit_files(
+        self,
+        event_emitter,
+        files: list,
+    ) -> None:
+        if event_emitter:
+            await event_emitter(
+                {
+                    "type": "files",
+                    "data": {
+                        "files": [{**file, "type": "file"} for file in files],
+                    },
+                }
+            )
+
     async def _emit_status(
         self,
         event_emitter,
@@ -775,8 +796,9 @@ class Tools:
         calendars: list = [],
         __request__: Request = None,
         __user__: dict = None,
-        __event_emitter__=None,
-        __event_call__=None,
+        __metadata__: dict = None,
+        __event_emitter__: callable = None,
+        __event_call__: callable = None,
     ) -> str:
         """
         Search for events on calendar.
@@ -820,15 +842,16 @@ class Tools:
         events: list,
         __request__: Request = None,
         __user__: dict = None,
-        __event_emitter__=None,
-        __event_call__=None,
+        __metadata__: dict = None,
+        __event_emitter__: callable = None,
+        __event_call__: callable = None,
     ) -> str:
         """
-        Fetch specific events from calendar.
-        Best to generate download URL.
+        Fetch specific events from calendar and generate download URL.
+        Best for content retrieval as ICS format.
 
         :param events: A list of caldav path for events to fetch
-        :return: JSON with results containing ICS filename, file ID and download URL for each event
+        :return: JSON with results containing file ID, filename and download URL for each event
         """
         user, session = self.context.get()
 
@@ -864,15 +887,26 @@ class Tools:
             results.update(
                 {
                     file_id: {
-                        "filename": filename,
                         "id": file_id,
-                        "url": (
-                            f'{str(__request__.base_url).rstrip("/")}'
-                            f"/api/v1/files/{file_id}/content?attachment=true"
+                        "name": filename,
+                        "size": len(content),
+                        "content_type": mimetype,
+                        "url": __request__.app.url_path_for(
+                            "get_file_content_by_id",
+                            id=file_id,
+                            file_name=filename,
                         ),
                     }
                 }
             )
+
+        # Add files to chat metadata
+        __metadata__["files"].extend(list(results.values()))
+
+        await self._emit_files(
+            __event_emitter__,
+            list(results.values()),
+        )
 
         await self._emit_status(
             __event_emitter__,
@@ -894,8 +928,9 @@ class Tools:
         attendees: list = None,
         __request__: Request = None,
         __user__: dict = None,
-        __event_emitter__=None,
-        __event_call__=None,
+        __metadata__: dict = None,
+        __event_emitter__: callable = None,
+        __event_call__: callable = None,
     ) -> str:
         """
         Create a new event into calendar.
@@ -951,8 +986,9 @@ class Tools:
         attendees: list = None,
         __request__: Request = None,
         __user__: dict = None,
-        __event_emitter__=None,
-        __event_call__=None,
+        __metadata__: dict = None,
+        __event_emitter__: callable = None,
+        __event_call__: callable = None,
     ) -> str:
         """
         Update an event from calendar.
@@ -1003,8 +1039,9 @@ class Tools:
         path: str,
         __request__: Request = None,
         __user__: dict = None,
-        __event_emitter__=None,
-        __event_call__=None,
+        __metadata__: dict = None,
+        __event_emitter__: callable = None,
+        __event_call__: callable = None,
     ) -> str:
         """
         Delete an event from calendar.
