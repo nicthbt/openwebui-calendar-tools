@@ -52,6 +52,8 @@ The output contains for each result:
 
 - Open WebUI file ID
 - Filename
+- Size in bytes
+- Content type
 - Download URL
 
 ### `create_calendar_event`

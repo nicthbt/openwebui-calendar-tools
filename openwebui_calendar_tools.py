@@ -851,7 +851,7 @@ class Tools:
         Best for content retrieval as ICS format.
 
         :param events: A list of caldav path for events to fetch
-        :return: JSON with results containing file ID, filename and download URL for each event
+        :return: JSON with results containing file ID, filename, size in bytes, content type and download URL for each event
         """
         user, session = self.context.get()
 
