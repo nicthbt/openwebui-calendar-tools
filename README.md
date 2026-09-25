@@ -128,7 +128,7 @@ The output is empty.
 1. Go to `Workspace` in Open WebUI.
 2. Create a new tool from the `Tools` tab.
 3. Paste the content of `openwebui_calendar_tools.py` and save the tool.
-4. Enable the tool in your custom model in `Models`.
+4. Enable the tool in your custom model in `Models` and disable calendar builtin tool.
 5. Configure the tool valves to change default settings.
 6. Configure the username and password for each user.
 
