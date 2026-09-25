@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/uppersafe/
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.2.1
+version: 1.2.2
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -701,6 +701,7 @@ class Tools:
 
     async def _upload_file(
         self,
+        source: str,
         filename: str,
         mimetype: str,
         content: bytes,
@@ -710,7 +711,7 @@ class Tools:
     ) -> tuple:
         async with get_async_db_context() as db:
             # Search for file in cache
-            file_hash = blake2b(content).hexdigest()
+            file_hash = blake2b(source.encode() + b"\0" + content).hexdigest()
             file_id, file_collection = await self._get_cache_file(
                 file_hash,
                 user=user,
@@ -732,6 +733,13 @@ class Tools:
                     db=db,
                 )
                 file_id = file.id
+
+            # Update source
+            await Files.update_file_metadata_by_id(
+                file_id,
+                {"source": source},
+                db=db,
+            )
 
             # Process file if not in cache
             if file_collection is None and process is True:
@@ -875,6 +883,7 @@ class Tools:
 
             # Upload file but do not process content
             file_id, file_collection = await self._upload_file(
+                path,
                 filename,
                 mimetype,
                 content,
