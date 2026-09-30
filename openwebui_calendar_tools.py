@@ -240,15 +240,18 @@ class CalendarClient:
         except Exception as e:
             raise CalendarException("Invalid ISO 8601 format")
 
-        time_start = any([range_start.hour, range_start.minute, range_start.second])
-        time_end = any([range_end.hour, range_end.minute, range_end.second])
+        if range_start is not None and range_end is not None:
+            # Check time value
+            time_start = any([range_start.hour, range_start.minute, range_start.second])
+            time_end = any([range_end.hour, range_end.minute, range_end.second])
 
-        if not time_start and not time_end:
-            range_start = range_start.date()
-            range_end = range_end.date()
+            # Convert datetime to date if time value is equal to zero
+            if not time_start and not time_end:
+                range_start = range_start.date()
+                range_end = range_end.date()
 
-        if range_start and range_end and range_start >= range_end:
-            raise CalendarException("End date must be after start date")
+            if range_start >= range_end:
+                raise CalendarException("End date must be after start date")
 
         return range_start, range_end
 
