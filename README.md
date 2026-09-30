@@ -9,6 +9,7 @@ Search on calendar for information and manage specific event content.
 - Ranks search results using keywords scoring and event date.
 - Downloads events as ICS files.
 - Secures identity and access management with isolated/user-based authentication.
+- Integrates with Pyodide and Open Terminal.
 - Supports CalDAV protocol.
 
 ## Available tools
@@ -50,11 +51,10 @@ Input parameters:
 
 The output contains for each result:
 
-- Open WebUI file ID
+- Open WebUI file ID or Open Terminal path
 - Filename
 - Size in bytes
 - Content type
-- Download URL
 
 ### `create_calendar_event`
 
