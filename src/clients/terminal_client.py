@@ -2,9 +2,13 @@ import logging
 
 import requests
 
-from src.common.exceptions import OpenTerminalException
+from src.common.exceptions import CustomToolException
 
 log = logging.getLogger(__name__)
+
+
+class OpenTerminalException(CustomToolException):
+    pass
 
 
 class OpenTerminalClient:

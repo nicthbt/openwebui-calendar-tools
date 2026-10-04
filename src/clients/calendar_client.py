@@ -4,9 +4,13 @@ from urllib.parse import urljoin
 
 from caldav import Calendar, DAVClient, Event
 
-from src.common.exceptions import CalendarException
+from src.common.exceptions import CustomToolException
 
 log = logging.getLogger(__name__)
+
+
+class CalendarException(CustomToolException):
+    pass
 
 
 class CalendarClient:

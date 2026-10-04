@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.4.0
+version: 1.4.1
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -23,10 +23,9 @@ from fastapi import Request
 from pydantic import BaseModel, Field
 
 from src.clients.calendar_client import CalendarClient
-from src.clients.terminal_client import OpenTerminalClient
-from src.common.custom_tool import CustomTool
+from src.clients.terminal_client import OpenTerminalClient, OpenTerminalException
+from src.common.base import CustomTool
 from src.common.decorators import with_context
-from src.common.exceptions import OpenTerminalException
 
 log = logging.getLogger(__name__)
 
@@ -437,7 +436,7 @@ class Tools(CustomTool):
             filename = os.path.basename(path)
             mimetype, encoding = mimetypes.guess_type(filename)
 
-            if mimetype and not mimetype.startswith("text/"):
+            if mimetype is None or not mimetype.startswith("text/"):
                 raise TypeError(f"Invalid mimetype '{mimetype}' for '{path}'")
 
             log.info(f"Downloading '{path}'")

@@ -1,6 +1,7 @@
 import io
 import logging
 import mimetypes
+import os
 import re
 import unicodedata
 from contextvars import ContextVar
@@ -16,7 +17,9 @@ from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
 from open_webui.routers.files import upload_file_handler
 from open_webui.routers.retrieval import (
     ProcessFileForm,
+    QueryCollectionsForm,
     process_file,
+    query_collection_handler,
 )
 
 log = logging.getLogger(__name__)
@@ -42,6 +45,15 @@ class CustomTool:
             mimetypes.add_type(mimetype, extension)
         for extension, mimetype in libreoffice.items():
             mimetypes.add_type(mimetype, extension)
+
+    def _is_media(
+        self,
+        mimetype: str,
+        checklist: list = ["image/", "audio/", "video/"],
+    ) -> bool:
+        if mimetype is not None:
+            return mimetype.startswith(tuple(checklist))
+        return False
 
     def _seq_match(self, text: str, keywords: list) -> list:
         # Normalize text in ascii characters
@@ -86,6 +98,52 @@ class CustomTool:
             raise ValueError(f"Cannot build keywords from query string '{query}'")
 
         return list(keywords)
+
+    async def _query_collections(
+        self,
+        query: str,
+        collections: list,
+        __user__: dict,
+        __request__: Request,
+    ) -> list:
+        # Query the collection using the retrieval engine
+        collection_results = await query_collection_handler(
+            __request__,
+            QueryCollectionsForm(
+                collection_names=collections,
+                query=query,
+            ),
+            user=UserModel(**__user__),
+        )
+
+        results = {}
+
+        # Generate query-focused results (instead of relying on raw results)
+        for distances, metadatas, documents in zip(
+            collection_results.get("distances", []),
+            collection_results.get("metadatas", []),
+            collection_results.get("documents", []),
+        ):
+            for distance, metadata, document in zip(distances, metadatas, documents):
+                file_id = metadata.get("file_id")
+                file_metadata = await Files.get_file_metadata_by_id(file_id)
+                source = file_metadata.meta.get("source") or metadata.get("source")
+                source_hash = blake2b(source.encode()).hexdigest()
+                # Add new source to results or update existing source with new snippets
+                snippets = results.get(source_hash, {}).get("snippets", [])
+                snippets.append(document)
+                # Add new source to results or update existing source with new snippets
+                results.update(
+                    {
+                        source_hash: {
+                            "id": file_id,
+                            "source": source,
+                            "snippets": snippets,
+                        }
+                    }
+                )
+
+        return list(results.values())
 
     async def _get_cache_file(
         self,
@@ -195,6 +253,39 @@ class CustomTool:
             )
 
             return file_id, file_collection
+
+    async def _emit_sources(
+        self,
+        event_emitter,
+        files: list,
+    ) -> None:
+        for file in files:
+            file_id = file.get("id")
+            source = file.get("source")
+            filename = os.path.basename(source)
+            snippets = file.get("snippets")
+            if event_emitter:
+                await event_emitter(
+                    {
+                        "type": "source",
+                        "data": {
+                            "source": {
+                                "id": file_id,
+                                "name": filename,
+                                "type": "file",
+                            },
+                            "document": snippets,
+                            "metadata": [
+                                {
+                                    "file_id": file_id,
+                                    "name": filename,
+                                    "source": source,
+                                }
+                                for snippet in snippets
+                            ],
+                        },
+                    }
+                )
 
     async def _emit_files(
         self,
