@@ -1,0 +1,15 @@
+{
+  "label": "Build",
+  "type": "shell",
+  "command": "python3",
+  "args": [
+    "${workspaceFolder}/build.py",
+    "--output",
+    "openwebui_calendar_tools.py",
+  ],
+  "group": {
+    "kind": "build",
+    "isDefault": true
+  },
+  "problemMatcher": []
+}

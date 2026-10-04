@@ -1,53 +1,65 @@
 """
 title: Calendar tools
 author: Nicolas THIBAUT
-git_url: https://github.com/uppersafe/
+git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.3.0
+version: 1.4.0
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
 
-import os
-import io
-import re
-import time
-import json
-import stat
-import unicodedata
-import mimetypes
-import asyncio
-import logging
-import requests
-from urllib.parse import urljoin, urlsplit
-from hashlib import blake2b
-from difflib import SequenceMatcher
-from fastapi import Request, UploadFile
-from pydantic import BaseModel, Field
-from contextvars import ContextVar
-from functools import wraps
-from datetime import datetime, timedelta
-from caldav import DAVClient, Calendar, Event
 
-from open_webui.models.users import UserModel
+import logging
+from datetime import datetime
+from datetime import timedelta
+from urllib.parse import urljoin
+from caldav import Calendar
+from caldav import DAVClient
+from caldav import Event
+import requests
+import io
+import mimetypes
+import re
+import unicodedata
+from contextvars import ContextVar
+from difflib import SequenceMatcher
+from hashlib import blake2b
+from fastapi import Request
+from fastapi import UploadFile
+from open_webui.internal.db import get_async_db_context
 from open_webui.models.config import Config
 from open_webui.models.files import Files
-from open_webui.internal.db import get_async_db_context
-from open_webui.routers.files import upload_file_handler
+from open_webui.models.users import UserModel
 from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
-from open_webui.routers.retrieval import (
-    ProcessFileForm,
-    process_file,
-)
+from open_webui.routers.files import upload_file_handler
+from open_webui.routers.retrieval import ProcessFileForm
+from open_webui.routers.retrieval import process_file
+import json
+from functools import wraps
+import asyncio
+import os
+import time
+from urllib.parse import urlsplit
+from pydantic import BaseModel
+from pydantic import Field
+
 
 log = logging.getLogger(__name__)
 
 
-class CalendarException(Exception):
+class CustomToolException(Exception):
     def __init__(self, message, error=None):
         super().__init__(message)
         self.error = error
+
+
+class CalendarException(CustomToolException):
+    pass
+
+
+class OpenTerminalException(CustomToolException):
+    pass
 
 
 class CalendarClient:
@@ -237,7 +249,7 @@ class CalendarClient:
                 range_end = range_start + timedelta(days=365)
             else:
                 range_end = end
-        except Exception as e:
+        except Exception:
             raise CalendarException("Invalid ISO 8601 format")
 
         if range_start is not None and range_end is not None:
@@ -254,10 +266,6 @@ class CalendarClient:
                 raise CalendarException("End date must be after start date")
 
         return range_start, range_end
-
-
-class OpenTerminalException(Exception):
-    pass
 
 
 class OpenTerminalClient:
@@ -364,276 +372,26 @@ class OpenTerminalClient:
         return bytes(content)
 
 
-def with_context(func):
-    @wraps(func)
-    async def wrapper(self, *args, **kwargs):
-        session = None
-        token = None
-
-        try:
-            __request__ = kwargs.get("__request__", None)
-            __user__ = kwargs.get("__user__", None)
-            __metadata__ = kwargs.get("__metadata__", None)
-            __event_emitter__ = kwargs.get("__event_emitter__", None)
-            __event_call__ = kwargs.get("__event_call__", None)
-
-            if __request__ is None:
-                raise ValueError("Request context not available")
-            if __user__ is None:
-                raise ValueError("User context not available")
-            if __metadata__ is None:
-                raise ValueError("Metadata context not available")
-            else:
-                if __metadata__.get("files", None) is None:
-                    __metadata__["files"] = []
-
-            user = UserModel(**__user__)
-            username, password = self._get_credentials(__user__.get("valves"))
-
-            await self._emit_status(
-                __event_emitter__,
-                "Connecting to calendar server...",
-                done=False,
-            )
-
-            # Connect to server
-            session = await self._connect_caldav(username, password)
-
-            # Set context for this call
-            token = self.context.set((user, session))
-
-            return await func(self, *args, **kwargs)
-
-        except CalendarException as e:
-            log.error(f"{e} ({e.error})" if e.error else str(e))
-            return json.dumps({"error": str(e)})
-
-        except Exception as e:
-            log.exception(e)
-            return json.dumps({"error": str(e)})
-
-        finally:
-            # Reset context for this call
-            if token is not None:
-                self.context.reset(token)
-
-            # Disconnect from server
-            if session is not None:
-                self._disconnect(session)
-
-    return wrapper
-
-
-class Tools:
-    class UserValves(BaseModel):
-        username: str = Field(
-            title="Calendar username",
-            default=None,
-        )
-        password: str = Field(
-            title="Calendar password",
-            default=None,
-            json_schema_extra={"input": {"type": "password"}},
-        )
-
-    class Valves(BaseModel):
-        protocol: str = Field(
-            title="Protocol",
-            default="caldav",
-            json_schema_extra={
-                "input": {
-                    "type": "select",
-                    "options": [
-                        {"value": "caldav", "label": "CalDAV"},
-                    ],
-                }
-            },
-        )
-        verify_ssl: bool = Field(
-            title="SSL verification",
-            default=True,
-        )
-        host: str = Field(
-            title="Server hostname or IP address",
-            default="host.docker.internal",
-        )
-        port: int | None = Field(
-            title="Server port",
-            default=None,
-            ge=1,
-            le=65535,
-        )
-        path: str | None = Field(
-            title="Server path",
-            default="/",
-        )
-        search_count: int = Field(
-            title="Search result count",
-            default=100,
-        )
-        search_timeout: int = Field(
-            title="Search timeout",
-            default=60,
-        )
-
-    def __init__(self):
+class CustomTool:
+    def __init__(self, namespace):
         self.valves = self.Valves()
-        self.context = ContextVar("tools.calendar")
-        self.namespace = "tools.calendar.files"
-
-    async def _connect_caldav(
-        self,
-        username: str,
-        password: str,
-        __event_call__=None,
-    ) -> CalendarClient:
-        session = CalendarClient(
-            host=self.valves.host,
-            port=self.valves.port or 443,
-            path=self.valves.path,
-            username=username,
-            password=password,
-            verify=self.valves.verify_ssl,
-        )
-        return session
-
-    def _disconnect(self, session) -> None:
-        if hasattr(session, "close"):
-            session.close()
-
-    def _browse_caldav(
-        self,
-        session,
-        query: str,
-        start: str,
-        end: str,
-        calendars: list,
-        timeout: int = None,
-    ) -> list:
-        results = []
-        timeout = timeout or int(time.monotonic() + self.valves.search_timeout)
-
-        # Extract search keywords
-        keywords = self._extract_keywords(query)
-
-        # List calendars
-        if len(calendars) == 0:
-            calendars = session.list()
-
-        try:
-            for calendar in calendars:
-                if int(time.monotonic()) >= timeout:
-                    raise TimeoutError(
-                        f"Timeout of search task after {self.valves.search_timeout} secs"
-                    )
-
-                # Search for events
-                for component, url in session.search(calendar, start, end):
-                    results.append(
-                        self._score_message(
-                            url,
-                            calendar,
-                            component.start,
-                            component.end,
-                            component.summary,
-                            component.description,
-                            component.location,
-                            self._get_attendees(component.attendees),
-                            keywords,
-                        )
-                    )
-
-        except TimeoutError as e:
-            log.warning(e)
-
-        # Sort results and return best matches
-        return self._sort_results(results, [("score", True), ("start", False)])
-
-    def _create_caldav(
-        self,
-        session,
-        calendar: str,
-        start: str,
-        end: str,
-        title: str,
-        description: str,
-        location: str,
-        attendees: list,
-    ) -> dict:
-        component, url = session.create(
-            calendar,
-            start,
-            end,
-            title,
-            description,
-            location,
-            attendees,
-        )
-        return self._format_result(
-            url,
-            calendar,
-            component.start,
-            component.end,
-            component.summary,
-            component.description,
-            component.location,
-            self._get_attendees(component.attendees),
-        )
-
-    def _update_caldav(
-        self,
-        session,
-        path: str,
-        calendar: str,
-        start: str,
-        end: str,
-        title: str,
-        description: str,
-        location: str,
-        attendees: list,
-    ) -> dict:
-        component, url = session.update(
-            path,
-            calendar,
-            start,
-            end,
-            title,
-            description,
-            location,
-            attendees,
-        )
-        return self._format_result(
-            url,
-            calendar,
-            component.start,
-            component.end,
-            component.summary,
-            component.description,
-            component.location,
-            self._get_attendees(component.attendees),
-        )
-
-    def _delete_caldav(self, session, path: str) -> None:
-        session.delete(path)
-
-    def _download_caldav(self, session, path: str) -> bytes:
-        return session.download(path)
-
-    def _get_attendees(self, attendees: list):
-        return [
-            re.sub("^mailto:", "", attendee)
-            for attendee in map(str, attendees)
-            if attendee.startswith("mailto:")
-        ]
-
-    def _get_credentials(self, config: dict) -> dict:
-        if config.username is None:
-            raise ValueError("Please configure calendar username")
-
-        if config.password is None:
-            raise ValueError("Please configure calendar password")
-
-        return config.username.strip(), config.password.strip()
+        self.context = ContextVar(namespace)
+        self.namespace = namespace
+        # Add missing mimetypes
+        msoffice = {
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }
+        libreoffice = {
+            ".odt": "application/vnd.oasis.opendocument.text",
+            ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+            ".odp": "application/vnd.oasis.opendocument.presentation",
+        }
+        for extension, mimetype in msoffice.items():
+            mimetypes.add_type(mimetype, extension)
+        for extension, mimetype in libreoffice.items():
+            mimetypes.add_type(mimetype, extension)
 
     def _seq_match(self, text: str, keywords: list) -> list:
         # Normalize text in ascii characters
@@ -655,93 +413,6 @@ class Tools:
             SequenceMatcher(None, nfkd_keyword, nfkd_text).find_longest_match().size
             for nfkd_keyword in nfkd_keywords
         ]
-
-    def _score_message(
-        self,
-        url: str,
-        calendar: str,
-        start: datetime,
-        end: datetime,
-        title: str,
-        description: str,
-        location: str,
-        attendees: list,
-        keywords: list,
-    ) -> dict:
-        # Initialize score to zero
-        score = 0
-
-        # Calculate the keywords total length
-        total_length = sum(len(keyword) for keyword in keywords)
-
-        # Calculate the weight of one character
-        match_weight = 1.0 / max(1.0, total_length)
-
-        if title is not None:
-            # Calculate match with title
-            score = score + sum(
-                match_size * match_weight
-                for match_size in self._seq_match(title, keywords)
-            )
-
-        if description is not None:
-            # Calculate match with description
-            score = score + sum(
-                match_size * match_weight
-                for match_size in self._seq_match(description, keywords)
-            )
-
-        if location is not None:
-            # Calculate match with location
-            score = score + sum(
-                match_size * match_weight
-                for match_size in self._seq_match(location, keywords)
-            )
-
-        for attendee in attendees:
-            # Calculate match with attendee
-            score = score + sum(
-                match_size * match_weight
-                for match_size in self._seq_match(attendee, keywords)
-            )
-
-        return self._format_result(
-            url,
-            calendar,
-            start,
-            end,
-            title,
-            description,
-            location,
-            attendees,
-            score,
-        )
-
-    def _format_result(
-        self,
-        url: str,
-        calendar: str,
-        start: datetime,
-        end: datetime,
-        title: str,
-        description: str,
-        location: str,
-        attendees: list,
-        score: float = None,
-    ) -> dict:
-        result = {
-            "path": urlsplit(str(url)).path,
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "calendar": calendar,
-            "title": title,
-            "description": description,
-            "location": location,
-            "attendees": attendees,
-        }
-        if score is not None:
-            result.update({"score": score})
-        return result
 
     def _sort_results(self, results: list, keys: list) -> list:
         # Sort by keys from lowest to highest priority
@@ -771,7 +442,7 @@ class Tools:
         file_hash: str,
         user: UserModel,
     ) -> tuple:
-        cache_key = f"{self.namespace}.{user.id}.{file_hash}"
+        cache_key = f"{self.namespace}.files.{user.id}.{file_hash}"
         cache_value = await Config.get(cache_key, {})
 
         file_id = cache_value.get("id", None)
@@ -804,7 +475,7 @@ class Tools:
         file_collection: str,
         user: UserModel,
     ) -> None:
-        cache_key = f"{self.namespace}.{user.id}.{file_hash}"
+        cache_key = f"{self.namespace}.files.{user.id}.{file_hash}"
         cache_value = {
             "id": file_id,
             "collection": file_collection,
@@ -818,10 +489,12 @@ class Tools:
         mimetype: str,
         content: bytes,
         process: bool,
-        user: UserModel,
+        __user__: dict,
         __request__: Request,
     ) -> tuple:
         async with get_async_db_context() as db:
+            user = UserModel(**__user__)
+
             # Search for file in cache
             file_hash = blake2b(source.encode() + b"\0" + content).hexdigest()
             file_id, file_collection = await self._get_cache_file(
@@ -914,6 +587,385 @@ class Tools:
                 }
             )
 
+
+def with_context(func):
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        session = None
+        token = None
+
+        try:
+            __request__ = kwargs.get("__request__", None)
+            __user__ = kwargs.get("__user__", None)
+            __metadata__ = kwargs.get("__metadata__", None)
+            __event_emitter__ = kwargs.get("__event_emitter__", None)
+            __event_call__ = kwargs.get("__event_call__", None)
+
+            if __request__ is None:
+                raise ValueError("Request context not available")
+            if __user__ is None:
+                raise ValueError("User context not available")
+            if __metadata__ is None:
+                raise ValueError("Metadata context not available")
+            else:
+                if __metadata__.get("files", None) is None:
+                    __metadata__["files"] = []
+
+            connect_handler, *other_handlers = self._get_handlers()
+
+            await self._emit_status(
+                __event_emitter__,
+                "Connecting to server...",
+                done=False,
+            )
+
+            # Connect to server
+            session = await connect_handler(__user__, __event_call__)
+
+            # Set context for this call
+            token = self.context.set((session, *other_handlers))
+
+            return await func(self, *args, **kwargs)
+
+        except CustomToolException as e:
+            log.error(f"{e} ({e.error})" if e.error else str(e))
+            return json.dumps({"error": str(e)})
+
+        except Exception as e:
+            log.exception(e)
+            return json.dumps({"error": str(e)})
+
+        finally:
+            # Reset context for this call
+            if token is not None:
+                self.context.reset(token)
+
+            # Disconnect from server
+            if session is not None:
+                self._disconnect(session)
+
+    return wrapper
+
+
+class Tools(CustomTool):
+    class UserValves(BaseModel):
+        username: str = Field(
+            title="Calendar username",
+            default=None,
+        )
+        password: str = Field(
+            title="Calendar password",
+            default=None,
+            json_schema_extra={"input": {"type": "password"}},
+        )
+
+    class Valves(BaseModel):
+        protocol: str = Field(
+            title="Protocol",
+            default="caldav",
+            json_schema_extra={
+                "input": {
+                    "type": "select",
+                    "options": [
+                        {"value": "caldav", "label": "CalDAV"},
+                    ],
+                }
+            },
+        )
+        verify_ssl: bool = Field(
+            title="SSL verification",
+            default=True,
+        )
+        host: str = Field(
+            title="Server hostname or IP address",
+            default="host.docker.internal",
+        )
+        port: int | None = Field(
+            title="Server port",
+            default=None,
+            ge=1,
+            le=65535,
+        )
+        path: str | None = Field(
+            title="Server path",
+            default="/",
+        )
+        search_count: int = Field(
+            title="Search result count",
+            default=100,
+        )
+        search_timeout: int = Field(
+            title="Search timeout",
+            default=60,
+        )
+
+    def __init__(self):
+        super().__init__("tools.calendar")
+
+    def _get_credentials(self, config: dict) -> dict:
+        if config.username is None:
+            raise ValueError("Please configure calendar username")
+
+        if config.password is None:
+            raise ValueError("Please configure calendar password")
+
+        return config.username.strip(), config.password.strip()
+
+    def _get_handlers(self) -> tuple:
+        # Return handlers
+        match self.valves.protocol:
+            case "caldav":
+                connect_handler = self._connect_caldav
+                browse_handler = self._browse_caldav
+                download_handler = self._download_caldav
+                create_handler = self._create_caldav
+                update_handler = self._update_caldav
+                delete_handler = self._delete_caldav
+
+            case _:
+                raise ValueError("Unknown protocol")
+
+        return (
+            connect_handler,
+            browse_handler,
+            download_handler,
+            create_handler,
+            update_handler,
+            delete_handler,
+        )
+
+    async def _connect_caldav(
+        self,
+        __user__: dict,
+        __event_call__: callable = None,
+    ) -> CalendarClient:
+        username, password = self._get_credentials(__user__.get("valves"))
+        session = CalendarClient(
+            host=self.valves.host,
+            port=self.valves.port or 443,
+            path=self.valves.path,
+            username=username,
+            password=password,
+            verify=self.valves.verify_ssl,
+        )
+        return session
+
+    def _disconnect(self, session) -> None:
+        if hasattr(session, "close"):
+            session.close()
+
+    def _browse_caldav(
+        self,
+        session,
+        query: str,
+        start: str,
+        end: str,
+        calendars: list,
+        timeout: int = None,
+    ) -> list:
+        results = []
+        timeout = timeout or int(time.monotonic() + self.valves.search_timeout)
+
+        # Extract search keywords
+        keywords = self._extract_keywords(query)
+
+        # List calendars
+        if len(calendars) == 0:
+            calendars = session.list()
+
+        try:
+            for calendar in calendars:
+                if int(time.monotonic()) >= timeout:
+                    raise TimeoutError(
+                        f"Timeout of search task after {self.valves.search_timeout} secs"
+                    )
+
+                # Search for events
+                for component, url in session.search(calendar, start, end):
+                    results.append(
+                        self._score_message(
+                            url,
+                            calendar,
+                            component.start,
+                            component.end,
+                            component.summary,
+                            component.description,
+                            component.location,
+                            self._parse_attendees(component.attendees),
+                            keywords,
+                        )
+                    )
+
+        except TimeoutError as e:
+            log.warning(e)
+
+        # Sort results and return best matches
+        return self._sort_results(results, [("score", True), ("start", False)])
+
+    def _create_caldav(
+        self,
+        session,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+    ) -> dict:
+        component, url = session.create(
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+        )
+        return self._format_result(
+            url,
+            calendar,
+            component.start,
+            component.end,
+            component.summary,
+            component.description,
+            component.location,
+            self._parse_attendees(component.attendees),
+        )
+
+    def _update_caldav(
+        self,
+        session,
+        path: str,
+        calendar: str,
+        start: str,
+        end: str,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+    ) -> dict:
+        component, url = session.update(
+            path,
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+        )
+        return self._format_result(
+            url,
+            calendar,
+            component.start,
+            component.end,
+            component.summary,
+            component.description,
+            component.location,
+            self._parse_attendees(component.attendees),
+        )
+
+    def _delete_caldav(self, session, path: str) -> None:
+        session.delete(path)
+
+    def _download_caldav(self, session, path: str) -> bytes:
+        return session.download(path)
+
+    def _parse_attendees(self, attendees: list):
+        return [
+            re.sub("^mailto:", "", attendee)
+            for attendee in map(str, attendees)
+            if attendee.startswith("mailto:")
+        ]
+
+    def _score_message(
+        self,
+        url: str,
+        calendar: str,
+        start: datetime,
+        end: datetime,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+        keywords: list,
+    ) -> dict:
+        # Initialize score to zero
+        score = 0
+
+        # Calculate the keywords total length
+        total_length = sum(len(keyword) for keyword in keywords)
+
+        # Calculate the weight of one character
+        match_weight = 1.0 / max(1.0, total_length)
+
+        if title is not None:
+            # Calculate match with title
+            score = score + sum(
+                match_size * match_weight
+                for match_size in self._seq_match(title, keywords)
+            )
+
+        if description is not None:
+            # Calculate match with description
+            score = score + sum(
+                match_size * match_weight
+                for match_size in self._seq_match(description, keywords)
+            )
+
+        if location is not None:
+            # Calculate match with location
+            score = score + sum(
+                match_size * match_weight
+                for match_size in self._seq_match(location, keywords)
+            )
+
+        for attendee in attendees:
+            # Calculate match with attendee
+            score = score + sum(
+                match_size * match_weight
+                for match_size in self._seq_match(attendee, keywords)
+            )
+
+        return self._format_result(
+            url,
+            calendar,
+            start,
+            end,
+            title,
+            description,
+            location,
+            attendees,
+            score,
+        )
+
+    def _format_result(
+        self,
+        url: str,
+        calendar: str,
+        start: datetime,
+        end: datetime,
+        title: str,
+        description: str,
+        location: str,
+        attendees: list,
+        score: float = None,
+    ) -> dict:
+        result = {
+            "path": urlsplit(str(url)).path,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "calendar": calendar,
+            "title": title,
+            "description": description,
+            "location": location,
+            "attendees": attendees,
+        }
+        if score is not None:
+            result.update({"score": score})
+        return result
+
     @with_context
     async def search_calendar_events(
         self,
@@ -935,9 +987,9 @@ class Tools:
         :param start: Start of the time range as ISO 8601 timezone-aware date format (inclusive, defaults to now)
         :param end: End of the time range as ISO 8601 timezone-aware date format (exclusive, defaults to a year from now)
         :param calendars: A list of calendars to look into (optional, defaults to all)
-        :return: JSON with results containing caldav path, start date, end date, calendar name, title, description, location, attendees and search score of each event
+        :return: JSON with results containing CalDAV path, start date, end date, calendar name, title, description, location, attendees and search score of each event
         """
-        user, session = self.context.get()
+        session, browse_handler, *_ = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -947,7 +999,7 @@ class Tools:
 
         # Browse events
         results = await asyncio.to_thread(
-            self._browse_caldav,
+            browse_handler,
             session,
             query,
             start,
@@ -977,10 +1029,10 @@ class Tools:
         Fetch specific events from calendar and attach them to the conversation.
         Best for downloading events as ICS format and processing them with other tools.
 
-        :param events: A list of caldav path for events to fetch
+        :param events: A list of CalDAV path for events to fetch
         :return: JSON with results containing file ID or filesystem path, filename, size in bytes and content type for each event
         """
-        user, session = self.context.get()
+        session, browse_handler, download_handler, *_ = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -1005,7 +1057,7 @@ class Tools:
                 raise TypeError(f"Invalid mimetype '{mimetype}' for '{path}'")
 
             log.info(f"Downloading '{path}'")
-            content = await asyncio.to_thread(self._download_caldav, session, path)
+            content = await asyncio.to_thread(download_handler, session, path)
 
             if terminal is not None:
                 # Upload file to Open Terminal
@@ -1024,7 +1076,7 @@ class Tools:
                     mimetype,
                     content,
                     process=False,
-                    user=user,
+                    __user__=__user__,
                     __request__=__request__,
                 )
                 result = {
@@ -1077,9 +1129,9 @@ class Tools:
         :param description: The description of the event (optional)
         :param location: The location of the event (optional)
         :param attendees: A list of attendees for the event (optional)
-        :return: JSON with result containing caldav path, start date, end date, calendar name, title, description, location and attendees of the event
+        :return: JSON with result containing CalDAV path, start date, end date, calendar name, title, description, location and attendees of the event
         """
-        user, session = self.context.get()
+        session, *_, create_handler, update_handler, delete_handler = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -1089,7 +1141,7 @@ class Tools:
 
         # Create event
         result = await asyncio.to_thread(
-            self._create_caldav,
+            create_handler,
             session,
             calendar,
             start,
@@ -1102,7 +1154,7 @@ class Tools:
 
         await self._emit_status(
             __event_emitter__,
-            f"Event creation done.",
+            "Event creation done.",
             done=True,
         )
 
@@ -1128,7 +1180,7 @@ class Tools:
         """
         Update an event from calendar.
 
-        :param path: The caldav path of the event
+        :param path: The CalDAV path of the event
         :param calendar: The name of the calendar to update the event from
         :param start: Start of the event as ISO 8601 timezone-aware date format (inclusive, mandatory when end date is set)
         :param end: End of the event as ISO 8601 timezone-aware date format (exclusive, mandatory when start date is set)
@@ -1136,9 +1188,9 @@ class Tools:
         :param description: The description of the event (optional)
         :param location: The location of the event (optional)
         :param attendees: A list of attendees for the event (optional)
-        :return: JSON with result containing caldav path, start date, end date, calendar name, title, description, location and attendees of the event
+        :return: JSON with result containing CalDAV path, start date, end date, calendar name, title, description, location and attendees of the event
         """
-        user, session = self.context.get()
+        session, *_, create_handler, update_handler, delete_handler = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -1148,7 +1200,7 @@ class Tools:
 
         # Update event
         result = await asyncio.to_thread(
-            self._update_caldav,
+            update_handler,
             session,
             path,
             calendar,
@@ -1162,7 +1214,7 @@ class Tools:
 
         await self._emit_status(
             __event_emitter__,
-            f"Event update done.",
+            "Event update done.",
             done=True,
         )
 
@@ -1181,10 +1233,10 @@ class Tools:
         """
         Delete an event from calendar.
 
-        :param path: The caldav path of the event
+        :param path: The CalDAV path of the event
         :return: JSON with result
         """
-        user, session = self.context.get()
+        session, *_, create_handler, update_handler, delete_handler = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -1194,14 +1246,14 @@ class Tools:
 
         # Delete event
         await asyncio.to_thread(
-            self._delete_caldav,
+            delete_handler,
             session,
             path,
         )
 
         await self._emit_status(
             __event_emitter__,
-            f"Event deletion done.",
+            "Event deletion done.",
             done=True,
         )
 
