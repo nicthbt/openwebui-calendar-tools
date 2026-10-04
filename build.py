@@ -1,3 +1,8 @@
+"""
+author: Nicolas THIBAUT
+description: Script to compile the source files into a single distribution file
+"""
+
 import argparse
 import ast
 import os
@@ -5,7 +10,7 @@ import re
 
 
 def filter_body(lines: list, nodes: list) -> str:
-    # Delete from bottom to top to preserve the original line numbers.
+    # Delete nodes from bottom to top to preserve the original line numbers.
     for node in sorted(nodes, key=lambda node: node.lineno, reverse=True):
         before = lines[node.lineno - 1][: node.col_offset].strip()
         after = lines[node.end_lineno - 1][node.end_col_offset :].split("#")[0].strip()
