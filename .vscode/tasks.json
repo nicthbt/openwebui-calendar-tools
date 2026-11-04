@@ -1,7 +1,7 @@
 {
   "label": "Build",
   "type": "shell",
-  "command": "python3",
+  "command": "${workspaceFolder}/.venv/bin/python",
   "args": [
     "${workspaceFolder}/build.py",
     "--output",

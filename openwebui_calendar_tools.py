@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.4.1
+version: 1.4.2
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -678,6 +678,10 @@ class CustomTool:
             )
 
 
+def custom_tool(cls):
+    return type(cls.__name__, (cls, CustomTool), {})
+
+
 def with_context(func):
     @wraps(func)
     async def wrapper(self, *args, **kwargs):
@@ -737,7 +741,8 @@ def with_context(func):
     return wrapper
 
 
-class Tools(CustomTool):
+@custom_tool
+class Tools:
     class UserValves(BaseModel):
         username: str = Field(
             title="Calendar username",

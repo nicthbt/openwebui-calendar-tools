@@ -2,9 +2,14 @@ import json
 import logging
 from functools import wraps
 
+from src.common.base import CustomTool
 from src.common.exceptions import CustomToolException
 
 log = logging.getLogger(__name__)
+
+
+def custom_tool(cls):
+    return type(cls.__name__, (cls, CustomTool), {})
 
 
 def with_context(func):

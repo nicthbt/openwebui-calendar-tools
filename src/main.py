@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.4.1
+version: 1.4.2
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -24,13 +24,13 @@ from pydantic import BaseModel, Field
 
 from src.clients.calendar_client import CalendarClient
 from src.clients.terminal_client import OpenTerminalClient, OpenTerminalException
-from src.common.base import CustomTool
-from src.common.decorators import with_context
+from src.common.decorators import custom_tool, with_context
 
 log = logging.getLogger(__name__)
 
 
-class Tools(CustomTool):
+@custom_tool
+class Tools:
     class UserValves(BaseModel):
         username: str = Field(
             title="Calendar username",
