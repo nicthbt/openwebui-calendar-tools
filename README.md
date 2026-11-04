@@ -2,19 +2,19 @@
 
 Search on calendar for information and manage specific event content.
 
-## Features
+## ✨ Features
 
-- Creates, updates and deletes events across calendars.
-- Searches for events in specified time range and calendars.
-- Ranks search results using keywords scoring and event date.
-- Downloads events as ICS files.
-- Secures identity and access management with isolated/user-based authentication.
-- Integrates with Pyodide and Open Terminal.
-- Supports CalDAV protocol.
+- 📅 Creates, updates and deletes events across calendars.
+- 🔍 Searches for events in specified time range and calendars.
+- 🏆 Ranks search results using keywords scoring and event date.
+- 📥 Downloads events as ICS files.
+- 🔐 Secures identity and access management with isolated/user-based authentication.
+- 🧩 Integrates with Pyodide and Open Terminal.
+- 🔌 Supports CalDAV protocol.
 
-## Available tools
+## 🛠️ Available tools
 
-### `search_calendar_events`
+### 🔍 `search_calendar_events`
 
 Searches for events into calendars and returns metadata.
 
@@ -39,7 +39,7 @@ The output contains for each result:
 - Attendees
 - Search score
 
-### `fetch_calendar_events`
+### 📥 `fetch_calendar_events`
 
 Retrieves specific events from calendar and uses Open WebUI's file upload system to generate download links.
 
@@ -56,7 +56,7 @@ The output contains for each result:
 - Size in bytes
 - Content type
 
-### `create_calendar_event`
+### ✏️ `create_calendar_event`
 
 Creates a new event into calendar and returns metadata.
 
@@ -83,7 +83,7 @@ The output contains:
 - Location
 - Attendees
 
-### `update_calendar_event`
+### 🔄 `update_calendar_event`
 
 Modifies an event from calendar and returns metadata.
 
@@ -111,7 +111,7 @@ The output contains:
 - Location
 - Attendees
 
-### `delete_calendar_event`
+### 🗑️ `delete_calendar_event`
 
 Deletes an event from calendar.
 
@@ -123,7 +123,7 @@ Input parameters:
 
 The output is empty.
 
-## Installation
+## 📦 Installation
 
 1. Go to `Workspace` in Open WebUI.
 2. Create a new tool from the `Tools` tab.
@@ -132,16 +132,16 @@ The output is empty.
 5. Configure the tool valves to change default settings.
 6. Configure the username and password for each user.
 
-## Configuration
+## ⚙️ Configuration
 
-### User Valves
+### 👤 User Valves
 
 | Setting | Description |
 |---|---|
 | `username` | Calendar username. |
 | `password` | Calendar password. |
 
-### Tool Valves
+### 🔧 Tool Valves
 
 | Setting | Default | Description |
 |---|---:|---|
@@ -155,17 +155,17 @@ The output is empty.
 
 When `port` is not set, the protocol default port (`443`) is used.
 
-## CalDAV endpoints
+## 🌐 CalDAV endpoints
 
 | Provider | Host | Port | Path |
 |---|---|---|---|
-| Apple iCloud | `caldav.icloud.com` | `443` | `/`
-| Google Calendar | `www.google.com` | `443` | `/calendar/dav/`
-| Synology | `example.com` | `5001` | `/caldav/`
-| Nextcloud | `example.com` | `443` | `/remote.php/dav/`
-| SOGo | `example.com` | `443` | `/SOGo/dav/`
+| Apple iCloud | `caldav.icloud.com` | `443` | `/` |
+| Google Calendar | `www.google.com` | `443` | `/calendar/dav/` |
+| Synology | `example.com` | `5001` | `/caldav/` |
+| Nextcloud | `example.com` | `443` | `/remote.php/dav/` |
+| SOGo | `example.com` | `443` | `/SOGo/dav/` |
 
-## Security
+## 🛡️ Security
 
 **Apple and Google require to setup an app password** to access your account over the CalDAV protocol:
 - Apple: https://account.apple.com/account/manage
@@ -177,13 +177,13 @@ When `port` is not set, the protocol default port (`443`) is used.
 
 Restrict network access between Open WebUI and the calendar server.
 
-## Compatibility
+## ✅ Compatibility
 
-Tested with **Open WebUI 0.10.2**.
+Tested **from Open WebUI 0.10.2 to 0.12.5**.
 
 The tool imports internal Open WebUI modules, so compatibility with earlier or later releases is not guaranteed.
 
-## Requirements
+## 📌 Requirements
 
 Allow Open WebUI to install listed requirements:
 - Set `ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS` to `true`.
@@ -192,6 +192,6 @@ Allow Open WebUI to install listed requirements:
 The tool relies on a 3rd party Python package:
 - [caldav](https://github.com/python-caldav/caldav)
 
-## License
+## ℹ️ License
 
 [GNU AGPLv3](LICENSE)
