@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.4.2
+version: 1.4.3
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
