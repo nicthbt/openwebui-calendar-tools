@@ -1164,7 +1164,7 @@ class Tools:
     ) -> str:
         """
         Fetch specific events from calendar and attach them to the conversation.
-        Best for downloading events as ICS format and processing them with other tools.
+        Best for downloading events as ICS format and processing them as input for other tools.
 
         :param events: A list of CalDAV path for events to fetch
         :return: JSON with results containing file ID or filesystem path, filename, size in bytes and content type for each event
