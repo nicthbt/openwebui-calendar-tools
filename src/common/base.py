@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import mimetypes
@@ -21,6 +22,7 @@ from open_webui.routers.retrieval import (
     process_file,
     query_collection_handler,
 )
+from open_webui.storage.provider import Storage
 
 log = logging.getLogger(__name__)
 
@@ -189,6 +191,29 @@ class CustomTool:
             "collection": file_collection,
         }
         await Config.upsert({cache_key: cache_value})
+
+    async def _get_file(self, source: str, terminal=None) -> tuple:
+        # Retrieve file content based on the file ID or the filesystem path
+        if source.startswith("/"):
+            if terminal is None:
+                raise ValueError(f"No terminal available to fetch '{source}'")
+            filename = os.path.basename(source)
+            content = await asyncio.to_thread(
+                terminal.download_file,
+                source,
+            )
+        else:
+            file = await Files.get_file_by_id(source)
+            if file is None:
+                raise ValueError(f"File not found '{source}'")
+            filename = file.filename
+            path = await asyncio.to_thread(
+                Storage.get_file,
+                file.path,
+            )
+            with open(path, "rb") as f:
+                content = f.read()
+        return filename, content
 
     async def _upload_file(
         self,

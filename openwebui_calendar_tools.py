@@ -18,6 +18,7 @@ from caldav import Calendar
 from caldav import DAVClient
 from caldav import Event
 import requests
+import asyncio
 import io
 import mimetypes
 import os
@@ -38,9 +39,9 @@ from open_webui.routers.retrieval import ProcessFileForm
 from open_webui.routers.retrieval import QueryCollectionsForm
 from open_webui.routers.retrieval import process_file
 from open_webui.routers.retrieval import query_collection_handler
+from open_webui.storage.provider import Storage
 import json
 from functools import wraps
-import asyncio
 import time
 from urllib.parse import urlsplit
 from pydantic import BaseModel
@@ -319,11 +320,16 @@ class OpenTerminalClient:
         self.http.close()
 
     def get_cwd(self, timeout: int = 10) -> str:
-        response = self.http.get(
-            self.api.get("CWD"),
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.http.get(
+                self.api.get("CWD"),
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            raise OpenTerminalException(
+                "Unable to get current working directory in Open Terminal", e
+            )
 
         # Load response as JSON
         response_json = response.json()
@@ -338,13 +344,20 @@ class OpenTerminalClient:
         directory: str = None,
         timeout: int = 60,
     ) -> dict:
-        response = self.http.post(
-            self.api.get("UPLOAD"),
-            params={"directory": directory or self.get_cwd()},
-            files={"file": (filename, content, mimetype or "application/octet-stream")},
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.http.post(
+                self.api.get("UPLOAD"),
+                params={"directory": directory or self.get_cwd()},
+                files={
+                    "file": (filename, content, mimetype or "application/octet-stream")
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            raise OpenTerminalException(
+                f"Unable to upload '{filename}' to Open Terminal", e
+            )
 
         # Load response as JSON
         response_json = response.json()
@@ -360,17 +373,23 @@ class OpenTerminalClient:
         }
 
     def download_file(self, path: str, timeout: int = 60) -> bytes:
-        response = self.http.get(
-            self.api.get("VIEW"),
-            params={"path": path},
-            stream=True,
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.http.get(
+                self.api.get("VIEW"),
+                params={"path": path},
+                stream=True,
+                timeout=timeout,
+            )
+            response.raise_for_status()
 
-        content = bytearray()
-        for chunk in response.iter_content(chunk_size=65536):
-            content.extend(chunk)
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=65536):
+                content.extend(chunk)
+        except Exception as e:
+            raise OpenTerminalException(
+                f"Unable to download '{path}' from Open Terminal", e
+            )
+
         return bytes(content)
 
 
@@ -538,6 +557,29 @@ class CustomTool:
             "collection": file_collection,
         }
         await Config.upsert({cache_key: cache_value})
+
+    async def _get_file(self, source: str, terminal=None) -> tuple:
+        # Retrieve file content based on the file ID or the filesystem path
+        if source.startswith("/"):
+            if terminal is None:
+                raise ValueError(f"No terminal available to fetch '{source}'")
+            filename = os.path.basename(source)
+            content = await asyncio.to_thread(
+                terminal.download_file,
+                source,
+            )
+        else:
+            file = await Files.get_file_by_id(source)
+            if file is None:
+                raise ValueError(f"File not found '{source}'")
+            filename = file.filename
+            path = await asyncio.to_thread(
+                Storage.get_file,
+                file.path,
+            )
+            with open(path, "rb") as f:
+                content = f.read()
+        return filename, content
 
     async def _upload_file(
         self,
