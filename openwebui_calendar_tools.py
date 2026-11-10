@@ -854,7 +854,7 @@ class Tools:
             case "caldav":
                 connect_handler = self._connect_caldav
                 browse_handler = self._browse_caldav
-                download_handler = self._download_caldav
+                read_handler = self._read_caldav
                 create_handler = self._create_caldav
                 update_handler = self._update_caldav
                 delete_handler = self._delete_caldav
@@ -865,7 +865,7 @@ class Tools:
         return (
             connect_handler,
             browse_handler,
-            download_handler,
+            read_handler,
             create_handler,
             update_handler,
             delete_handler,
@@ -1006,7 +1006,7 @@ class Tools:
     def _delete_caldav(self, session, path: str) -> None:
         session.delete(path)
 
-    def _download_caldav(self, session, path: str) -> bytes:
+    def _read_caldav(self, session, path: str) -> bytes:
         return session.download(path)
 
     def _parse_attendees(self, attendees: list):
@@ -1169,7 +1169,7 @@ class Tools:
         :param events: A list of CalDAV path for events to fetch
         :return: JSON with results containing file ID or filesystem path, filename, size in bytes and content type for each event
         """
-        session, browse_handler, download_handler, *_ = self.context.get()
+        session, browse_handler, read_handler, *_ = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -1194,7 +1194,7 @@ class Tools:
                 raise TypeError(f"Invalid mimetype '{mimetype}' for '{path}'")
 
             log.info(f"Downloading '{path}'")
-            content = await asyncio.to_thread(download_handler, session, path)
+            content = await asyncio.to_thread(read_handler, session, path)
 
             if terminal is not None:
                 # Upload file to Open Terminal
