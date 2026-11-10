@@ -179,7 +179,7 @@ Restrict network access between Open WebUI and the calendar server.
 
 ## ✅ Compatibility
 
-Tested **from Open WebUI 0.10.2 to 0.12.5**.
+Tested **from Open WebUI 0.10.2 to 0.13.3**.
 
 The tool imports internal Open WebUI modules, so compatibility with earlier or later releases is not guaranteed.
 

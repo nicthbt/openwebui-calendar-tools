@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.4.2
+version: 1.4.3
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -18,6 +18,7 @@ from caldav import Calendar
 from caldav import DAVClient
 from caldav import Event
 import requests
+import asyncio
 import io
 import mimetypes
 import os
@@ -38,9 +39,9 @@ from open_webui.routers.retrieval import ProcessFileForm
 from open_webui.routers.retrieval import QueryCollectionsForm
 from open_webui.routers.retrieval import process_file
 from open_webui.routers.retrieval import query_collection_handler
+from open_webui.storage.provider import Storage
 import json
 from functools import wraps
-import asyncio
 import time
 from urllib.parse import urlsplit
 from pydantic import BaseModel
@@ -319,11 +320,16 @@ class OpenTerminalClient:
         self.http.close()
 
     def get_cwd(self, timeout: int = 10) -> str:
-        response = self.http.get(
-            self.api.get("CWD"),
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.http.get(
+                self.api.get("CWD"),
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            raise OpenTerminalException(
+                "Unable to get current working directory in Open Terminal", e
+            )
 
         # Load response as JSON
         response_json = response.json()
@@ -338,13 +344,20 @@ class OpenTerminalClient:
         directory: str = None,
         timeout: int = 60,
     ) -> dict:
-        response = self.http.post(
-            self.api.get("UPLOAD"),
-            params={"directory": directory or self.get_cwd()},
-            files={"file": (filename, content, mimetype or "application/octet-stream")},
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.http.post(
+                self.api.get("UPLOAD"),
+                params={"directory": directory or self.get_cwd()},
+                files={
+                    "file": (filename, content, mimetype or "application/octet-stream")
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            raise OpenTerminalException(
+                f"Unable to upload '{filename}' to Open Terminal", e
+            )
 
         # Load response as JSON
         response_json = response.json()
@@ -360,17 +373,23 @@ class OpenTerminalClient:
         }
 
     def download_file(self, path: str, timeout: int = 60) -> bytes:
-        response = self.http.get(
-            self.api.get("VIEW"),
-            params={"path": path},
-            stream=True,
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.http.get(
+                self.api.get("VIEW"),
+                params={"path": path},
+                stream=True,
+                timeout=timeout,
+            )
+            response.raise_for_status()
 
-        content = bytearray()
-        for chunk in response.iter_content(chunk_size=65536):
-            content.extend(chunk)
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=65536):
+                content.extend(chunk)
+        except Exception as e:
+            raise OpenTerminalException(
+                f"Unable to download '{path}' from Open Terminal", e
+            )
+
         return bytes(content)
 
 
@@ -538,6 +557,29 @@ class CustomTool:
             "collection": file_collection,
         }
         await Config.upsert({cache_key: cache_value})
+
+    async def _get_file(self, source: str, terminal=None) -> tuple:
+        # Retrieve file content based on the file ID or the filesystem path
+        if source.startswith("/"):
+            if terminal is None:
+                raise ValueError(f"No terminal available to fetch '{source}'")
+            filename = os.path.basename(source)
+            content = await asyncio.to_thread(
+                terminal.download_file,
+                source,
+            )
+        else:
+            file = await Files.get_file_by_id(source)
+            if file is None:
+                raise ValueError(f"File not found '{source}'")
+            filename = file.filename
+            path = await asyncio.to_thread(
+                Storage.get_file,
+                file.path,
+            )
+            with open(path, "rb") as f:
+                content = f.read()
+        return filename, content
 
     async def _upload_file(
         self,
@@ -812,7 +854,7 @@ class Tools:
             case "caldav":
                 connect_handler = self._connect_caldav
                 browse_handler = self._browse_caldav
-                download_handler = self._download_caldav
+                read_handler = self._read_caldav
                 create_handler = self._create_caldav
                 update_handler = self._update_caldav
                 delete_handler = self._delete_caldav
@@ -823,7 +865,7 @@ class Tools:
         return (
             connect_handler,
             browse_handler,
-            download_handler,
+            read_handler,
             create_handler,
             update_handler,
             delete_handler,
@@ -964,7 +1006,7 @@ class Tools:
     def _delete_caldav(self, session, path: str) -> None:
         session.delete(path)
 
-    def _download_caldav(self, session, path: str) -> bytes:
+    def _read_caldav(self, session, path: str) -> bytes:
         return session.download(path)
 
     def _parse_attendees(self, attendees: list):
@@ -1122,12 +1164,12 @@ class Tools:
     ) -> str:
         """
         Fetch specific events from calendar and attach them to the conversation.
-        Best for downloading events as ICS format and processing them with other tools.
+        Best for downloading events as ICS format and processing them as input for other tools.
 
         :param events: A list of CalDAV path for events to fetch
         :return: JSON with results containing file ID or filesystem path, filename, size in bytes and content type for each event
         """
-        session, browse_handler, download_handler, *_ = self.context.get()
+        session, browse_handler, read_handler, *_ = self.context.get()
 
         await self._emit_status(
             __event_emitter__,
@@ -1152,7 +1194,7 @@ class Tools:
                 raise TypeError(f"Invalid mimetype '{mimetype}' for '{path}'")
 
             log.info(f"Downloading '{path}'")
-            content = await asyncio.to_thread(download_handler, session, path)
+            content = await asyncio.to_thread(read_handler, session, path)
 
             if terminal is not None:
                 # Upload file to Open Terminal
