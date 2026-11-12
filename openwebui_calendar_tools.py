@@ -409,9 +409,16 @@ class CustomTool:
             ".ods": "application/vnd.oasis.opendocument.spreadsheet",
             ".odp": "application/vnd.oasis.opendocument.presentation",
         }
+        calendar = {
+            ".ics": "text/calendar",
+            ".ifb": "text/calendar",
+            ".vcs": "text/calendar",
+        }
         for extension, mimetype in msoffice.items():
             mimetypes.add_type(mimetype, extension)
         for extension, mimetype in libreoffice.items():
+            mimetypes.add_type(mimetype, extension)
+        for extension, mimetype in calendar.items():
             mimetypes.add_type(mimetype, extension)
 
     def _is_media(
