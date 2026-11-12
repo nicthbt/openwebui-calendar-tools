@@ -4,7 +4,7 @@ author: Nicolas THIBAUT
 git_url: https://github.com/nicthbt/openwebui-calendar-tools
 description: Search on calendar for information and manage specific event content.
 license: AGPL-3.0-only
-version: 1.4.3
+version: 1.4.4
 required_open_webui_version: 0.10.2
 requirements: caldav
 """
@@ -409,9 +409,16 @@ class CustomTool:
             ".ods": "application/vnd.oasis.opendocument.spreadsheet",
             ".odp": "application/vnd.oasis.opendocument.presentation",
         }
+        calendar = {
+            ".ics": "text/calendar",
+            ".ifb": "text/calendar",
+            ".vcs": "text/calendar",
+        }
         for extension, mimetype in msoffice.items():
             mimetypes.add_type(mimetype, extension)
         for extension, mimetype in libreoffice.items():
+            mimetypes.add_type(mimetype, extension)
+        for extension, mimetype in calendar.items():
             mimetypes.add_type(mimetype, extension)
 
     def _is_media(
